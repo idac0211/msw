@@ -8,6 +8,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Pretendard', sans-serif; background-color: #ffffff; color: #1e293b; -webkit-text-size-adjust: 100%; }
+        .spinner { animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="p-2 md:p-8">
@@ -24,8 +26,14 @@
             </div>
         </header>
 
+        <!-- Loading Indicator -->
+        <div id="loading-indicator" class="flex flex-col items-center justify-center py-20">
+            <div class="spinner w-8 h-8 border-4 border-red-600 border-t-transparent rounded-full mb-3"></div>
+            <p class="text-sm text-slate-400 font-medium">구글 시트에서 최신 일정을 불러오는 중...</p>
+        </div>
+
         <!-- Timeline Container -->
-        <div id="timeline-container" class="space-y-4 md:space-y-6"></div>
+        <div id="timeline-container" class="space-y-4 md:space-y-6 hidden"></div>
 
         <!-- Admin Toggle Footer -->
         <footer class="mt-10 md:mt-16 text-center">
@@ -58,8 +66,10 @@
     </div>
 
     <script>
+        const API_URL = "https://script.google.com/macros/s/AKfycbx5aflyJT3yml9WxqdX_6euuu3Ph7uMhhJ0Ai1ulAOPypoBdMWDGA9U3YB_7ZoW_xTBPg/exec";
         let isAdmin = false;
         const ADMIN_PASSWORD = "idac0211";
+        let schedules = [];
 
         const initialData = [
             { id: 1, month: "1월", date: "1/19 ~ 1/28", title: "생성형 AI 콘텐츠 디자인 퍼블리싱", type: "(야간)" },
@@ -103,7 +113,42 @@
             { id: 39, month: "10월", date: "10월 중(미정)", title: "디지털 커머스 디자인 전략기획 실무", type: "(야간)" }
         ];
 
-        let schedules = JSON.parse(localStorage.getItem('tp_schedules')) || initialData;
+        async function fetchSchedules() {
+            const loadingEl = document.getElementById('loading-indicator');
+            const container = document.getElementById('timeline-container');
+            
+            try {
+                const response = await fetch(API_URL);
+                const data = await response.json();
+                if (Array.isArray(data) && data.length > 0) {
+                    schedules = data;
+                } else {
+                    schedules = initialData;
+                }
+            } catch (err) {
+                console.warn("구글 시트 연동 실패, 로컬 캐시 사용:", err);
+                schedules = JSON.parse(localStorage.getItem('tp_schedules')) || initialData;
+            }
+            
+            loadingEl.classList.add('hidden');
+            container.classList.remove('hidden');
+            renderSchedules();
+        }
+
+        async function syncWithServer() {
+            try {
+                await fetch(API_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(schedules)
+                });
+                alert("구글 시트에 성공적으로 동기화되었습니다!");
+            } catch (err) {
+                console.error("동기화 오류:", err);
+                alert("시트 동기화 중 오류가 발생했습니다.");
+            }
+        }
 
         function renderSchedules() {
             const container = document.getElementById('timeline-container');
@@ -111,7 +156,7 @@
             const months = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월"];
 
             months.forEach(month => {
-                const monthItems = schedules.filter(s => s.month === month);
+                const monthItems = schedules.filter(s => String(s.month) === month);
                 const row = document.createElement('div');
                 row.className = "flex flex-col md:flex-row bg-white rounded-2xl md:rounded-3xl shadow-sm border border-slate-100 overflow-hidden group transition-all duration-300 hover:shadow-md";
                 
@@ -164,7 +209,7 @@
             const title = document.getElementById('modal-title');
             
             if(id) {
-                const item = schedules.find(s => s.id === id);
+                const item = schedules.find(s => Number(s.id) === Number(id));
                 document.getElementById('item-id').value = item.id;
                 document.getElementById('item-month').value = item.month;
                 document.getElementById('item-date').value = item.date;
@@ -182,11 +227,11 @@
 
         function closeModal() { document.getElementById('modal').classList.replace('flex', 'hidden'); }
 
-        function saveSchedule(e) {
+        async function saveSchedule(e) {
             e.preventDefault();
             const id = document.getElementById('item-id').value;
             const data = {
-                id: id ? parseInt(id) : Date.now(),
+                id: id ? Number(id) : Date.now(),
                 month: document.getElementById('item-month').value,
                 date: document.getElementById('item-date').value,
                 title: document.getElementById('item-title').value,
@@ -194,36 +239,39 @@
             };
 
             if(id) {
-                const idx = schedules.findIndex(s => s.id === parseInt(id));
+                const idx = schedules.findIndex(s => Number(s.id) === Number(id));
                 schedules[idx] = data;
             } else {
                 schedules.push(data);
             }
             
-            localStorage.setItem('tp_schedules', JSON.stringify(schedules));
             closeModal();
             renderSchedules();
+            await syncWithServer();
+            fetchSchedules();
         }
 
         function editSchedule(id) { openModal(id); }
 
-        function deleteSchedule(id) {
+        async function deleteSchedule(id) {
             if(confirm("정말 삭제하시겠습니까?")) {
-                schedules = schedules.filter(s => s.id !== id);
-                localStorage.setItem('tp_schedules', JSON.stringify(schedules));
+                schedules = schedules.filter(s => Number(s.id) !== Number(id));
                 renderSchedules();
+                await syncWithServer();
+                fetchSchedules();
             }
         }
 
-        function forceResetData() {
+        async function forceResetData() {
             if(confirm("모든 데이터를 초기값으로 되돌릴까요?")) {
                 schedules = initialData;
-                localStorage.setItem('tp_schedules', JSON.stringify(schedules));
                 renderSchedules();
+                await syncWithServer();
+                fetchSchedules();
             }
         }
 
-        renderSchedules();
+        fetchSchedules();
     </script>
 </body>
 </html>
